@@ -54,7 +54,7 @@ what seems like a command prompt `? `. Trying some commands like `ls`,
 `echo`, `cat`... achieves nothing, so it definitely isn't a shell, `help`
 doesn't help either ;)
 
-At his point no more blinf testing can be done, so it's time to read
+At his point no more blind testing can be done, so it's time to read
 the datasheet and the source code.
 
 ## Walking through the datasheet
@@ -75,8 +75,8 @@ All the sensors and the EEPROM are connected with the microcontroller
 through the I2C bus.
 
 By googling [8051], we can find that there is a processor with that name,
-this could be useful if, say *cough cough* for a reason, we needed 
-to reprogram the device *cough cough*, and just in general to have a
+this could be useful if, say *cough* for a reason, we needed 
+to reprogram the device *cough*, and just in general to have a
 better understanding of the components in the system.
 
 Further down we have a table giving the I2C ports
@@ -208,7 +208,7 @@ value, and so, for example `1013` would also be valid since it starts with
 101.
 
 So as long as we have a number starting with 101(or the others), we can
-figure out a value that, when wrapped around as it is convert to a uint8
+figure out a value that, when wrapped around as it is converted to a uint8
 will give us any arbitrary port we wish.
 
 It would be useful to write a function that would take an input port and
@@ -229,9 +229,8 @@ def exploit_port(port):
 
 ### EEPROM I2C port
 The second problem is that we do not know the I2C port that would let us
-program the EEPROM, the datasheet however mentions something about pinging
-a device. So if we can just ping all possible ports(256 of them), we would
-be able to guess which one is the EEPROM.
+program the EEPROM, we can however just send dummy read commands and if
+there is no error returned, then the device should exist
 
 Let's start by the basics:
 ```py
@@ -239,10 +238,9 @@ from pwn import *
 
 p = remote('weather.2022.ctfcompetition.com',1337)
 ```
-All we need to do now, is make a dummy read operation and if we do not get
-an error then the port is valid. We could've used 0 for the request length
-and do as the datasheet says *a ping*, but the program will refuse a value
-of 0, so instead we just send 1 as request length.
+. We could've used 0 for the request length and do as the datasheet says
+*a ping*, but the program will refuse a value of 0, so instead we just
+send 1 as request length.
 
 ```py
 def print_all_valid_i2c_ports():
@@ -312,20 +310,21 @@ the region with FFs. I found a good candidate for that in the
 0000130 fc07 1660 f3e5 fc60 828d 838e f08f 0712
 ```
 We can change `82` to `02`(opcode for LJMP) just by clearing bits, and
-`AF83` to `0C00`, this address is arbitrary and any address in the FF
-region will do(of course it needs to be reachable from AF83 just by
-clearing bits), as for the first byte at 0x0123, we can change it to a 
-NOP(0x00) so that it is ignored.
+`AF83` to `0C00`(the 8051 uses big endian words), this address is
+arbitrary and any address in the FF region will do(of course it needs to
+be reachable from AF83 just by clearing bits), as for the first byte at
+0x0123, we can change it to a NOP(0x00) so that it is ignored.
 
 What we are essentially doing here is inserting the following shellcode
 inside `serial_print`:
 ```s
-NOP
-LJMP 0x0C00
+serial_print:
+  NOP
+  LJMP 0x0C00
 ```
 
 The choice of the function `serial_print` was semi-arbitrary, we could've
-used any other function for the jump, but it also wqas strategic since
+used any other function for the jump, but it also was strategic since
 it is immediatly called after the write operation is done, so we don't
 need to send any other command to do the jump, it will just happen
 instantly.
@@ -355,10 +354,12 @@ END:
 It is the equivalent of the C code:
 ```c
 FLAGROM_ADDR = 0;
-while(++FLAGROM_ADDR)
+while(true)
 {
   while(!SERIAL_OUT_READY);
   SERIAL_OUT_DATA = FLAGROM_DATA;
+  if(!++FLAGROM_ADDR)
+    break;
 }
 while(!SERIAL_OUT_READY);
 SERIAL_OUT_DATA = '\n';
