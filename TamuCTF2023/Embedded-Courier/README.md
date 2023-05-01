@@ -666,5 +666,3 @@ And this is it, 20 hours of work and the flag is
 
 [GoogleCTF 2022 for the Hardware *Weather*]: ../../GoogleCTF2022/Hardware-Weather/README.md
 
-
-
